@@ -1,0 +1,58 @@
+name: StartupScores private proof
+
+on:
+  workflow_call:
+    inputs:
+      proof_url:
+        description: StartupScores GitHub Action proof endpoint
+        required: true
+        type: string
+      audience:
+        description: OIDC audience configured by StartupScores
+        required: true
+        type: string
+      include_commit_title:
+        description: Send only the latest commit subject when the product owner enabled public private commit titles
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      STARTUPSCORES_PAIRING_CODE:
+        required: false
+
+permissions:
+  contents: none
+  id-token: write
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send OIDC commit proof
+        shell: bash
+        env:
+          PAIRING_CODE: ${{ secrets.STARTUPSCORES_PAIRING_CODE }}
+          PROOF_URL: ${{ inputs.proof_url }}
+          OIDC_AUDIENCE: ${{ inputs.audience }}
+          INCLUDE_COMMIT_TITLE: ${{ inputs.include_commit_title }}
+          COMMIT_TITLE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          oidc_response="$(curl --fail-with-body --silent --show-error \
+            --get \
+            --data-urlencode "audience=${OIDC_AUDIENCE}" \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}")"
+          oidc_token="$(jq --raw-output --exit-status '.value' <<<"${oidc_response}")"
+          payload="$(jq --null-input \
+            --arg pairingCode "${PAIRING_CODE}" \
+            --arg commitTitle "${COMMIT_TITLE}" \
+            --argjson includeCommitTitle "${INCLUDE_COMMIT_TITLE}" \
+            '{pairingCode: $pairingCode} + (if $includeCommitTitle and ($commitTitle | length) > 0 then {commitTitle: $commitTitle} else {} end)')"
+          printf '%s' "${payload}" |
+            curl --fail-with-body --silent --show-error \
+              --request POST \
+              --header "Authorization: Bearer ${oidc_token}" \
+              --header 'Content-Type: application/json' \
+              --data-binary @- \
+              "${PROOF_URL}"
